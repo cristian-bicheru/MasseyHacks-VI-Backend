@@ -1,0 +1,4 @@
+python-socketio
+python-gnupg
+vincenty
+aiohttp
