@@ -70,7 +70,7 @@ def hmapalgo():
         else:
             grouped = False
             for grouping in hdata:
-                if vincenty((grouping[0], grouping[1]), (datapoint[0], datapoint[1]))*1000 < max(datapoint[5], grouping[5]):
+                if vincenty((grouping[0], grouping[1]), (datapoint[2], datapoint[3]))*1000 < max(datapoint[5], grouping[5]):
                     grouping[0] = grouping[0]*0.9+datapoint[2]*0.1
                     grouping[1] = grouping[1]*0.9+datapoint[3]*0.1
                     grouping[2] = weight(grouping, datapoint)
