@@ -3,3 +3,4 @@ python-gnupg
 vincenty
 aiohttp
 polyline
+aiohttp-cors

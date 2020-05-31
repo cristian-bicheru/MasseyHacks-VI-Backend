@@ -1,4 +1,5 @@
 from aiohttp import web
+import aiohttp_cors
 import socketio # repl.it autoinstalls wrong package; run os.system("pip3 install -r requirements.txt") instead
 import time
 import pickle
@@ -21,7 +22,7 @@ else:
 
 print("Input Google+Here API Key:")
 api_key, api_key_here = input().split('|')
-io = socketio.AsyncServer()
+io = socketio.AsyncServer(cors_allowed_origins='*')
 app = web.Application()
 io.attach(app)
 gpg = gnupg.GPG()
@@ -29,14 +30,15 @@ with open("pubkey", "r") as f:
     mlserverkey = gpg.import_keys(f.read())
 authed_sids = []
 drone_data = {} # sid : [slat, slong, salt, stime, high_altitude_mode]
-
-root_html = """<html>
-<body>
-<center>
-<h1 style="color:green;font-family:'Courier New'">COVIDMAPS BACKEND: ONLINE</h1>
-</center>
-</body>
-</html>"""
+with open("index.html", "r") as f:
+    root_html = f.read()
+##root_html = """<html>
+##<body>
+##<center>
+##<h1 style="color:green;font-family:'Courier New'">COVIDMAPS BACKEND: ONLINE</h1>
+##</center>
+##</body>
+##</html>"""
 
 def save_db(db):
     print()
@@ -100,7 +102,7 @@ root2 = math.sqrt(2)
 def format_exclusion_zones(exclusion_zones):
     outstr = ""
     for zone in exclusion_zones:
-        delta = zone[5]/root2
+        delta = zone[5]/root2*5
         outstr += format_coord(*add_m_to_coords(zone[0], zone[1], delta, delta))+';'
         outstr += format_coord(*add_m_to_coords(zone[0], zone[1], -delta, -delta))+'!'
 
@@ -218,12 +220,26 @@ async def get_heatmap_data(request):
 
 async def refresh_data():
     while True:
-        await asyncio.sleep(10)
+        await asyncio.sleep(60)
         await io.emit("heatmap_update", hmapalgo())
 
 asyncio.ensure_future(refresh_data())
-app.router.add_post('/pathfind', path_find_api)
-app.router.add_get('/heatmap', get_heatmap_data)
-app.router.add_get('/', index)
+routes = [
+    app.router.add_static('/assets', 'assets'),
+    app.router.add_static('/images', 'images'),
+    app.router.add_get('/', index),
+    app.router.add_get('/heatmap', get_heatmap_data),
+    app.router.add_post('/pathfind', path_find_api)]
+cors = aiohttp_cors.setup(app, defaults={
+    "*": aiohttp_cors.ResourceOptions(
+            allow_credentials=True,
+            expose_headers="*",
+            allow_headers="*",
+        )
+})
+
+for route in list(routes):
+    cors.add(route)
+
 web.run_app(app)
 save_db(db)
