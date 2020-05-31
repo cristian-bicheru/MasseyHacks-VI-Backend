@@ -9,6 +9,8 @@ import requests
 import math
 import asyncio
 import os
+import polyline
+import math
 
 # DB Format: [[time_stamp, alt, lat, long, num_people, fovradius], ...]
 if "database" in os.listdir():
@@ -17,8 +19,10 @@ if "database" in os.listdir():
 else:
     db = []
 
-print("Input API Key:")
+print("Input Google API Key:")
 api_key = input()
+print("Input Here API Key:")
+api_key_here = input()
 io = socketio.AsyncServer()
 app = web.Application()
 io.attach(app)
@@ -83,6 +87,85 @@ def hmapalgo():
 
     return [[x[0], x[1], x[2]] for x in hdata] # [[lat, long, weight, lastupdatetime, refweight, fovradius], ...]
 
+def format_coord(lat, long):
+    return str(lat)+','+str(long)
+
+k = 180/(math.pi*6371000)
+piby180 = math.pi/180
+# (approximation which works for small dx,dy)
+def add_m_to_coords(lat, long, dx, dy):
+    return (lat+dy*k, long+dx*k/math.cos(lat*piby180))
+
+root2 = math.sqrt(2)
+# convert zones to format required by the here api
+def format_exclusion_zones(exclusion_zones):
+    outstr = ""
+    for zone in exclusion_zones:
+        delta = zone[5]/root2
+        outstr += format_coord(*add_m_to_coords(zone[0], zone[1], -delta, -delta))+';'
+        outstr += format_coord(*add_m_to_coords(zone[0], zone[1], -delta, delta))+';'
+        outstr += format_coord(*add_m_to_coords(zone[0], zone[1], delta, -delta))+';'
+        outstr += format_coord(*add_m_to_coords(zone[0], zone[1], delta, delta))+'!'
+    return outstr[:-1] # remove last exclamation mark
+
+def maneuver_to_coord_array(maneuver):
+    ret = []
+    for waypoint in maneuver:
+        ret.append([waypoint["position"]["latitude"], waypoint["position"]["longitude"]])
+    return ret
+
+def convert_here_path_to_coord_array(here_json):
+    path = [[here_json["response"]["route"][0]["waypoint"][0]["mappedPosition"]["latitude"], here_json["response"]["route"][0]["waypoint"][0]["mappedPosition"]["longitude"]]]
+
+    for route in here_json["response"]["route"]:
+        for leg in route["leg"]:
+            path += maneuver_to_coord_array(leg['maneuver'])
+
+    path.append([here_json["response"]["route"][0]["waypoint"][1]["mappedPosition"]["latitude"], here_json["response"]["route"][0]["waypoint"][1]["mappedPosition"]["longitude"]])
+    
+
+def here_get_path(lat1, long1, lat2, long2, exclusion_zones):
+    here_json = requests.get("https://route.ls.hereapi.com/routing/7.2/calculateroute.json?apiKey="+api_key_here+"&waypoint0=geo!"+str(lat1)+','+str(long1)+
+                             "&waypoint1=geo!"+str(lat1)+','+str(long1)+"&mode=fastest;pedestrian&avoidareas="+format_exclusion_zones(exclusion_zones)).json()
+    return convert_here_path_to_coord_array(here_json)
+
+def google_maps_get_path(lat1, long1, lat2, long2):
+    google_json = requests.get("https://maps.googleapis.com/maps/api/directions/json?origin="+format_coord(lat1, long1)+"&destination="+format_coord(lat2, long2)+"&key="+api_key)
+    return polyline.decode(google_json["routes"][0]["overview_polyline"])
+
+k2 = 111133.34
+# technically also an approximation but it should always work
+def get_intersections(path, hdata):
+    hdatastack = hdata.copy()
+    ret = []
+    for i in range(len(path)-1):
+        a = path[i+1][1]-path[i][1]
+        b = path[i+1][0]-path[i][0]
+        for datap in hdatastack:
+            if abs(a*datap[0]+b*datap[1]-path[i][0]*a-path[i][1]*b)/math.sqrt(a**2 + b**2)*k2 <= datap[5]:
+                ret.append(datap)
+                hdatastack.remove(datap)
+    return ret
+
+def pathfind(lat1, long1, lat2, long2):
+    # HERE api limits number of exclusion zones to 20, therefore we have to take extra steps to figure out which
+    # zones we are to give to the api. If more than 20 exclusion zones are in the database, this is done by first
+    # getting the naive path from the Google Maps API, adding only the zones which intersect with the path, and
+    # then getting a path which avoides these zones. This does not guarentee that the path will be free of exclusion
+    # zones, but its the best we can do with these APIs.
+    
+    hdata = hmapalgo()
+    if len(db) < 20:
+        return polyline.encode(here_get_path(lat1, long1, lat2, long2, hdata))
+    else:
+        naive_path = google_maps_get_path(lat1, long1, lat2, long2)
+        intersections = get_intersections(naive_path, hdata)
+        return polyline.encode(here_get_path(lat1, long1, lat2, long2, intersections))
+
+async def path_find_api(request):
+    data = await request.post()
+    return web.json_response({'path':pathfind(data["latitude1"], data["longitude1"], data["latitude2"], data["longitude2"])})
+
 async def index(request):
     return web.Response(text=root_html, content_type='text/html')
 
@@ -146,16 +229,17 @@ async def log_data(sid, data):
         else:
             await io.emit("takeoff_status", "Error: Received Log Data Without Takeoff Data.", room=sid)
 
-@io.on("heatmap")
-async def hmap(sid):
-    await io.emit("heatmap_update", hmapalgo(), room=sid)
-    
+async def get_heatmap_data(request):
+    return web.json_response({'data':hmapalgo()})
+
 async def refresh_data():
     while True:
         await asyncio.sleep(10)
         await io.emit("heatmap_update", hmapalgo())
 
 asyncio.ensure_future(refresh_data())
+app.router.add_post('/pathfind', path_find_api)
+app.router.add_get('/heatmap', get_heatmap_data)
 app.router.add_get('/', index)
 web.run_app(app)
 save_db(db)
