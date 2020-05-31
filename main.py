@@ -1,9 +1,9 @@
 from aiohttp import web
-import socketio #prevent repl from autoinstalling another package
+import socketio # repl.it autoinstalls wrong package; run os.system("pip3 install -r requirements.txt") instead
 import time
 import pickle
 import atexit
-import gnupg #prevent repl from autoinstalling another package
+import gnupg # repl.it autoinstalls wrong package; run os.system("pip3 install -r requirements.txt") instead
 from vincenty import vincenty
 import requests
 import math
@@ -46,12 +46,11 @@ atexit.register(save_db, db)
 
 window = 3600 # one hour
 
-# calculate the radius of the fov on the ground assuming the drone is roughly 40m up
-fovradtan = math.tan(math.degrees(41))
+fovradtan = math.tan(math.degrees(41)) # FOV ~ 82 deg
 fade_duration = window#seconds
 
 def get_fov_radius(alt):
-    return max(alt*fovradtan, 20)#meters
+    return max(alt*fovradtan, 12)#meters, cutoff if fov is under 12m radius
 
 def weight(grouping, data):
     if data[4] > grouping[4] and abs(time.time()-data[0])<120:
