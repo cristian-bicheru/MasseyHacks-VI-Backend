@@ -19,10 +19,8 @@ if "database" in os.listdir():
 else:
     db = []
 
-print("Input Google API Key:")
-api_key = input()
-print("Input Here API Key:")
-api_key_here = input()
+print("Input Google+Here API Key:")
+api_key, api_key_here = input().split('|')
 io = socketio.AsyncServer()
 app = web.Application()
 io.attach(app)
@@ -64,7 +62,7 @@ def weight(grouping, data):
     else:
         return grouping[5]*max((grouping[3]+window-time.time())/window, 0)
 
-def hmapalgo():
+def hmapalgo(full=False):
     hdata = []
     # remove old data
     cutoff = time.time()-window
@@ -84,7 +82,8 @@ def hmapalgo():
 
             if not grouped:
                 hdata.append([datapoint[2], datapoint[3], datapoint[4]*max((datapoint[0]+window-time.time())/window, 0), datapoint[0], datapoint[4], datapoint[5]])
-
+    if full:
+        return hdata
     return [[x[0], x[1], x[2]] for x in hdata] # [[lat, long, weight, lastupdatetime, refweight, fovradius], ...]
 
 def format_coord(lat, long):
@@ -102,36 +101,20 @@ def format_exclusion_zones(exclusion_zones):
     outstr = ""
     for zone in exclusion_zones:
         delta = zone[5]/root2
-        outstr += format_coord(*add_m_to_coords(zone[0], zone[1], -delta, -delta))+';'
-        outstr += format_coord(*add_m_to_coords(zone[0], zone[1], -delta, delta))+';'
-        outstr += format_coord(*add_m_to_coords(zone[0], zone[1], delta, -delta))+';'
-        outstr += format_coord(*add_m_to_coords(zone[0], zone[1], delta, delta))+'!'
+        outstr += format_coord(*add_m_to_coords(zone[0], zone[1], delta, delta))+';'
+        outstr += format_coord(*add_m_to_coords(zone[0], zone[1], -delta, -delta))+'!'
+
     return outstr[:-1] # remove last exclamation mark
-
-def maneuver_to_coord_array(maneuver):
-    ret = []
-    for waypoint in maneuver:
-        ret.append([waypoint["position"]["latitude"], waypoint["position"]["longitude"]])
-    return ret
-
-def convert_here_path_to_coord_array(here_json):
-    path = [[here_json["response"]["route"][0]["waypoint"][0]["mappedPosition"]["latitude"], here_json["response"]["route"][0]["waypoint"][0]["mappedPosition"]["longitude"]]]
-
-    for route in here_json["response"]["route"]:
-        for leg in route["leg"]:
-            path += maneuver_to_coord_array(leg['maneuver'])
-
-    path.append([here_json["response"]["route"][0]["waypoint"][1]["mappedPosition"]["latitude"], here_json["response"]["route"][0]["waypoint"][1]["mappedPosition"]["longitude"]])
     
 
 def here_get_path(lat1, long1, lat2, long2, exclusion_zones):
     here_json = requests.get("https://route.ls.hereapi.com/routing/7.2/calculateroute.json?apiKey="+api_key_here+"&waypoint0=geo!"+str(lat1)+','+str(long1)+
-                             "&waypoint1=geo!"+str(lat1)+','+str(long1)+"&mode=fastest;pedestrian&avoidareas="+format_exclusion_zones(exclusion_zones)).json()
-    return convert_here_path_to_coord_array(here_json)
+                             "&waypoint1=geo!"+str(lat2)+','+str(long2)+"&mode=fastest;pedestrian&generalizationTolerances=0.00001,0.00001&routeAttributes=shape&avoidareas="+format_exclusion_zones(exclusion_zones)).json()
+    return [list(map(float, x.split(','))) for x in here_json["response"]["route"][0]["shape"]]
 
 def google_maps_get_path(lat1, long1, lat2, long2):
-    google_json = requests.get("https://maps.googleapis.com/maps/api/directions/json?origin="+format_coord(lat1, long1)+"&destination="+format_coord(lat2, long2)+"&key="+api_key)
-    return polyline.decode(google_json["routes"][0]["overview_polyline"])
+    google_json = requests.get("https://maps.googleapis.com/maps/api/directions/json?origin="+format_coord(lat1, long1)+"&destination="+format_coord(lat2, long2)+"&key="+api_key).json()
+    return polyline.decode(google_json["routes"][0]["overview_polyline"]["points"])
 
 k2 = 111133.34
 # technically also an approximation but it should always work
@@ -147,6 +130,7 @@ def get_intersections(path, hdata):
                 hdatastack.remove(datap)
     return ret
 
+
 def pathfind(lat1, long1, lat2, long2):
     # HERE api limits number of exclusion zones to 20, therefore we have to take extra steps to figure out which
     # zones we are to give to the api. If more than 20 exclusion zones are in the database, this is done by first
@@ -154,7 +138,7 @@ def pathfind(lat1, long1, lat2, long2):
     # then getting a path which avoides these zones. This does not guarentee that the path will be free of exclusion
     # zones, but its the best we can do with these APIs.
     
-    hdata = hmapalgo()
+    hdata = hmapalgo(full=True)
     if len(db) < 20:
         return polyline.encode(here_get_path(lat1, long1, lat2, long2, hdata))
     else:
