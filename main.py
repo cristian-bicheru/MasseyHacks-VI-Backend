@@ -1,3 +1,5 @@
+import os
+os.system("pip3 install -r requirements.txt")
 from aiohttp import web
 import aiohttp_cors
 import socketio # repl.it autoinstalls wrong package; run os.system("pip3 install -r requirements.txt") instead
@@ -12,6 +14,8 @@ import asyncio
 import os
 import polyline
 import math
+import json
+import getpass
 
 # DB Format: [[time_stamp, alt, lat, long, num_people, fovradius], ...]
 if "database" in os.listdir():
@@ -20,8 +24,7 @@ if "database" in os.listdir():
 else:
     db = []
 
-print("Input Google+Here API Key:")
-api_key, api_key_here = input().split('|')
+api_key, api_key_here = getpass.getpass(prompt='Input Google+Here API Key: ').split('|')
 io = socketio.AsyncServer(cors_allowed_origins='*')
 app = web.Application()
 io.attach(app)
@@ -112,6 +115,10 @@ def format_exclusion_zones(exclusion_zones):
 def here_get_path(lat1, long1, lat2, long2, exclusion_zones):
     here_json = requests.get("https://route.ls.hereapi.com/routing/7.2/calculateroute.json?apiKey="+api_key_here+"&waypoint0=geo!"+str(lat1)+','+str(long1)+
                              "&waypoint1=geo!"+str(lat2)+','+str(long2)+"&mode=fastest;pedestrian&generalizationTolerances=0.00001,0.00001&routeAttributes=shape&avoidareas="+format_exclusion_zones(exclusion_zones)).json()
+    try:
+        here_json["response"]
+    except:
+        print(here_json)
     return [list(map(float, x.split(','))) for x in here_json["response"]["route"][0]["shape"]]
 
 def google_maps_get_path(lat1, long1, lat2, long2):
@@ -149,7 +156,11 @@ def pathfind(lat1, long1, lat2, long2):
         return polyline.encode(here_get_path(lat1, long1, lat2, long2, intersections))
 
 async def path_find_api(request):
-    data = await request.post()
+    data = await request.read()
+    if data.startswith(b'{'):
+        data = json.loads(data)
+    else:
+        data = {x.split("=")[0]:float(x.split("=")[1]) for x in data.decode().split('&')}
     return web.json_response({'path':pathfind(data["latitude1"], data["longitude1"], data["latitude2"], data["longitude2"])})
 
 async def index(request):
@@ -212,6 +223,7 @@ async def log_data(sid, data):
                     await io.emit("takeoff_status", "Status: Exiting High-Altitude Reposition Mode...", room=sid)
                     drone_data[sid][4] = False
                 db.append([time.time()]+data+[get_fov_radius(data[0])])
+                await io.emit("heatmap_update", hmapalgo())
         else:
             await io.emit("takeoff_status", "Error: Received Log Data Without Takeoff Data.", room=sid)
 
@@ -220,7 +232,7 @@ async def get_heatmap_data(request):
 
 async def refresh_data():
     while True:
-        await asyncio.sleep(60)
+        await asyncio.sleep(8)
         await io.emit("heatmap_update", hmapalgo())
 
 asyncio.ensure_future(refresh_data())
